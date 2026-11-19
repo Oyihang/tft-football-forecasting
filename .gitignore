@@ -1,0 +1,26 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Downloaded competition data and generated features must remain local.
+data/raw/
+data/processed/home_credit_tft/
+data/processed/*.duckdb
+data/processed/*.parquet
+data/processed/*.npy
+data/processed/*.npz
+data/processed/*.csv
+data/notebooks/.ipynb_checkpoints/
+
+# Training outputs and generated predictions.
+artifacts/
+*.pt
+*.pth
+submission.csv
+
+# Football TFT generated data and artifacts
+data/processed/
+artifacts/football_tft/
