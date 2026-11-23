@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from src.config import DEFAULT_CONFIG, load_config, resolve_device
+from src.config import DEFAULT_CONFIG, data_config_snapshot, load_config, resolve_device
 from src.data.splits import training_sample_count
 from src.models.football_tft import build_football_tft
 from src.training.metrics import count_metrics
@@ -42,6 +42,8 @@ def main():
         raise ValueError("Config train_size differs from prepared data; rerun prepare_football.py.")
     if schema["context_length"] != cfg["context_length"]:
         raise ValueError("Config context_length differs from prepared data; rerun prepare_football.py.")
+    if schema.get("data_config") != data_config_snapshot(cfg):
+        raise ValueError("Data configuration differs from prepared data; rerun prepare_football.py.")
     home = np.load(data_dir / "home_history.npy")
     away = np.load(data_dir / "away_history.npy")
     known = np.load(data_dir / "known.npy")

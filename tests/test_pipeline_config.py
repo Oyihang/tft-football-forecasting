@@ -11,7 +11,6 @@ import torch
 from scipy.stats import poisson
 
 from src.config import DEFAULT_CONFIG, load_config
-from src.data.prepare_football import OBSERVED_COLUMNS, STATIC_CATEGORICAL, STATIC_NUMERIC
 from src.inference.predict import quantile_columns
 
 
@@ -25,20 +24,55 @@ class PipelineConfigTest(unittest.TestCase):
     def test_legacy_config_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "legacy.json"
-            path.write_text('{"train_size": 5}', encoding="utf-8")
+            path.write_text(
+                json.dumps({
+                    "train_size": 5,
+                    "features": {"known": {"position": "custom_position"}},
+                }),
+                encoding="utf-8",
+            )
             cfg = load_config(path)
         self.assertEqual(cfg["train_size"], 5)
         self.assertEqual(cfg["context_length"], 10)
         self.assertEqual(cfg["gru_layers"], 1)
         self.assertEqual(cfg["distribution"], "negative_binomial")
+        self.assertEqual(cfg["features"]["known"]["position"], "custom_position")
+        self.assertEqual(len(cfg["features"]["observed"]["numeric"]), 27)
 
     def test_configured_pipeline(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            cfg = load_config(DEFAULT_CONFIG)
+            feature_cfg = cfg["features"]
+            history_cfg = cfg["history_schema"]
+            history_cfg["history_rows_per_team"] = 4
+            history_cfg["away_sequence_start"] = 5
+            observed_columns = (
+                feature_cfg["observed"]["numeric"] + feature_cfg["observed"]["categorical"]
+            )
+            known_numeric = feature_cfg["known"]["numeric"]
+            known_categorical = feature_cfg["known"]["categorical"]
+            known_history_columns = known_numeric + known_categorical
+            static_numeric = feature_cfg["static"]["numeric"]
+            static_categorical = feature_cfg["static"]["categorical"]
+            sequence_ids = (
+                list(range(
+                    history_cfg["home_sequence_start"],
+                    history_cfg["home_sequence_start"] + history_cfg["history_rows_per_team"],
+                ))
+                + list(range(
+                    history_cfg["away_sequence_start"],
+                    history_cfg["away_sequence_start"] + history_cfg["history_rows_per_team"],
+                ))
+            )
             features = []
             results = []
             for match_id in range(4):
-                result = {column: 1 for column in STATIC_NUMERIC + STATIC_CATEGORICAL}
+                result = {
+                    column: 1
+                    for column in static_numeric + static_categorical
+                    + known_numeric + known_categorical
+                }
                 if match_id == 2:
                     result["rank"] = 1000
                     result["competition_type"] = 999
@@ -46,19 +80,23 @@ class PipelineConfigTest(unittest.TestCase):
                               home_scores=1, away_scores=2,
                               team_id=match_id * 2, team_id_oppo=match_id * 2 + 1)
                 results.append(result)
-                for seq_id in range(1, 21):
-                    feature = {column: seq_id for column in OBSERVED_COLUMNS}
+                for seq_id in sequence_ids:
+                    feature = {column: seq_id for column in observed_columns + known_history_columns}
                     if match_id == 2:
-                        feature = {column: seq_id + 100 for column in OBSERVED_COLUMNS}
+                        feature = {
+                            column: seq_id + 100
+                            for column in observed_columns + known_history_columns
+                        }
                     feature.update(match_id=match_id, seq_id=seq_id, match_time="01/01/2020",
-                                   team_id=match_id * 2 + (seq_id > 10))
+                                   team_id=match_id * 2 + (
+                                       seq_id >= history_cfg["away_sequence_start"]
+                                   ))
                     features.append(feature)
             feature_path = root / "features.csv"
             results_path = root / "results.csv"
             pd.DataFrame(features).to_csv(feature_path, index=False)
             pd.DataFrame(results).to_csv(results_path, index=False)
 
-            cfg = load_config(DEFAULT_CONFIG)
             cfg.update(
                 feature_path=str(feature_path), results_path=str(results_path),
                 processed_dir=str(root / "processed"), checkpoint_dir=str(root / "checkpoints"),
@@ -82,9 +120,16 @@ class PipelineConfigTest(unittest.TestCase):
             schema = json.loads((root / "processed" / "feature_schema.json").read_text(encoding="utf-8"))
             home = np.load(root / "processed" / "home_history.npy")
             away = np.load(root / "processed" / "away_history.npy")
-            self.assertEqual(home.shape[:2], (4, 3))
+            known = np.load(root / "processed" / "known.npy")
+            self.assertEqual(home.shape, (4, 3, 31))
+            self.assertEqual(away.shape, (4, 3, 31))
+            self.assertEqual(known.shape, (4, 4, 21))
             self.assertEqual(schema["context_length"], 3)
             self.assertEqual(schema["preprocessing_train_size"], 2)
+            self.assertEqual(schema["category_cardinalities"], [4, 4, 3, 5, 15])
+            self.assertEqual(schema["observed_category_cardinalities"], [4, 4, 3, 5])
+            self.assertEqual(schema["known_category_cardinalities"], [15, 15])
+            self.assertEqual(schema["static_category_cardinalities"], [4, 5])
             checkpoint = torch.load(root / "checkpoints" / "best_model.pt", map_location="cpu", weights_only=False)
             self.assertEqual(checkpoint["model_config"]["gru_layers"], 2)
             self.assertEqual(checkpoint["model_config"]["gru_dropout"], 0.1)
@@ -94,12 +139,13 @@ class PipelineConfigTest(unittest.TestCase):
             ))
             mean = schema["scalers"]["history_mean"][0]
             scale = schema["scalers"]["history_scale"][0]
-            self.assertEqual(mean, 7.0)
-            self.assertEqual(schema["scalers"]["static_median"]["rank"], 1.0)
+            self.assertEqual(mean, 4.0)
+            self.assertEqual(schema["scalers"]["static_median"]["venue_capacity"], 1.0)
             static = np.load(root / "processed" / "static.npy")
-            self.assertEqual(static[2, len(STATIC_NUMERIC)], 0)
+            self.assertEqual(static[2, len(static_numeric)], 0)
+            self.assertTrue(np.all(known[:, :, -2:] == np.floor(known[:, :, -2:])))
             np.testing.assert_allclose(home[0, :, 0] * scale + mean, [3, 2, 1], atol=1e-5)
-            np.testing.assert_allclose(away[0, :, 0] * scale + mean, [13, 12, 11], atol=1e-5)
+            np.testing.assert_allclose(away[0, :, 0] * scale + mean, [7, 6, 5], atol=1e-5)
             predictions = pd.read_csv(root / "predictions.csv")
             self.assertEqual(
                 list(predictions.columns),
@@ -135,6 +181,18 @@ class PipelineConfigTest(unittest.TestCase):
             self.assertEqual(len(nb_predictions), 1)
             for side in ("home", "away"):
                 np.testing.assert_array_equal(nb_predictions[f"pred_{side}_goals"], nb_predictions[f"{side}_p50"])
+
+            changed_config = json.loads(json.dumps(cfg))
+            changed_config["features"]["known"]["position"] = "changed_position"
+            changed_config_path = root / "changed_config.json"
+            changed_config_path.write_text(json.dumps(changed_config), encoding="utf-8")
+            stale_data = subprocess.run(
+                [sys.executable, "-X", "utf8", "-s", "-m", "src.training.train",
+                 "--config", str(changed_config_path)],
+                cwd=project, capture_output=True, text=True, encoding="utf-8",
+            )
+            self.assertNotEqual(stale_data.returncode, 0)
+            self.assertIn("Data configuration differs from prepared data", stale_data.stderr)
 
             schema_path = root / "processed" / "feature_schema.json"
             altered_schema = dict(schema)

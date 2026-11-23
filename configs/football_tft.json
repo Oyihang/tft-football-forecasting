@@ -6,6 +6,71 @@
   "inference_checkpoint": "artifacts/football_tft_poisson/best_model.pt",
   "inference_output": "artifacts/football_tft_poisson/test_predictions_with_scores.csv",
   "handicap_output": "artifacts/football_tft_poisson/handicap_predictions.csv",
+  "history_schema": {
+    "match_id_column": "match_id",
+    "sequence_id_column": "seq_id",
+    "feature_time_column": "match_time",
+    "result_time_column": "match_time",
+    "home_team_id_column": "team_id",
+    "away_team_id_column": "team_id_oppo",
+    "history_rows_per_team": 10,
+    "home_sequence_start": 1,
+    "away_sequence_start": 11,
+    "horizon_length": 1,
+    "timestamps_day_first": true
+  },
+  "features": {
+    "observed": {
+      "numeric": [
+        "win_rate_last_5", "days_since_last_match", "half_goals", "half_goals_oppo",
+        "goals", "goals_oppo", "red_cards", "red_cards_oppo", "yellow_cards",
+        "yellow_cards_oppo", "corner_kicks", "corner_kicks_oppo", "venue_capacity",
+        "group_count", "round_count", "shot_on_target", "shot_on_target_oppo",
+        "shot_off_target", "shot_off_target_oppo", "attack", "attack_oppo",
+        "danger_attack", "danger_attack_oppo", "possession", "possession_oppo",
+        "blocked_shot", "blocked_shot_oppo"
+      ],
+      "categorical": [
+        "competition_type", "is_neutral", "is_double_week", "venue_surface"
+      ]
+    },
+    "known": {
+      "numeric": [
+        "rank", "rank_oppo", "group_num", "round_num", "round_progress",
+        "pressure", "temperature", "wind", "humidity"
+      ],
+      "categorical": ["weather"],
+      "away_view_swaps": [["rank", "rank_oppo"]],
+      "position": "history_position"
+    },
+    "static": {
+      "numeric": ["venue_capacity", "group_count", "round_count"],
+      "categorical": ["competition_type", "venue_surface"]
+    },
+    "category_order": [
+      "competition_type", "is_neutral", "is_double_week", "venue_surface", "weather"
+    ],
+    "category_values": {
+      "competition_type": [1, 2, 3],
+      "is_neutral": [1, 2, 3],
+      "is_double_week": [0, 1],
+      "venue_surface": [1, 2, 3, 4],
+      "weather": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    },
+    "targets": ["home_scores", "away_scores"],
+    "excluded_columns": [
+      "match_id", "seq_id", "id", "team_id", "team_id_oppo",
+      "competition_id", "competition_name", "match_time", "venue_id",
+      "stage_id", "season_id", "eu_home", "eu_draw", "eu_away",
+      "rq", "rq_home", "rq_away", "live", "live_over", "live_under"
+    ]
+  },
+  "preprocessing": {
+    "unknown_category_index": 0,
+    "category_index_start": 1,
+    "empty_numeric_median": 0.0,
+    "history_position_range": [0.0, 1.0]
+  },
   "train_size": 6000,
   "context_length": 10,
   "validation_fraction": 0.15,
@@ -34,5 +99,22 @@
   "num_workers": 0,
   "device": "auto",
   "inference_device": "auto",
-  "inference_quantiles": [0.1, 0.5, 0.9]
+  "inference_quantiles": [0.1, 0.5, 0.9],
+  "legacy_defaults": {
+    "feature_path": "data/a_a_a_feature.csv",
+    "results_path": "data/a_a_a_test.csv",
+    "context_length": 10,
+    "distribution": "negative_binomial",
+    "gru_layers": 1,
+    "gru_dropout": 0.0,
+    "optimizer_betas": [0.9, 0.999],
+    "optimizer_eps": 1e-8,
+    "scheduler_factor": 0.5,
+    "scheduler_patience": 2,
+    "scheduler_threshold": 0.0001,
+    "scheduler_cooldown": 0,
+    "scheduler_min_lr": 0.0,
+    "inference_quantiles": [0.1, 0.5, 0.9],
+    "handicap_output": "artifacts/football_tft_poisson/handicap_predictions.csv"
+  }
 }

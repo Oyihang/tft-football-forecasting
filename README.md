@@ -18,38 +18,53 @@
 
 ## 2. observed / known / static 分类
 
-### Observed：主客队各自的历史时变特征
+### Observed：主客队各自 10 场历史
 
-两队使用相同字段定义，但通过两个参数独立的 GRU 编码器处理：
+每场比赛有主队历史 10 条和客队历史 10 条。`home_history.npy`、`away_history.npy` 的形状分别为
+`(样本数, context_length, 31)`；31 是每个历史时间步的特征数，不是时间步数。默认
+`context_length=10`。
 
-`competition_type, is_neutral, win_rate_last_5, days_since_last_match, is_double_week, rank, rank_oppo, half_goals, half_goals_oppo, goals, goals_oppo, red_cards, red_cards_oppo, yellow_cards, yellow_cards_oppo, corner_kicks, corner_kicks_oppo, venue_capacity, venue_surface, stage_id, season_id, group_count, round_count, group_num, round_num, round_progress, weather, pressure, temperature, wind, humidity`
+数值特征（27）：`win_rate_last_5, days_since_last_match, half_goals, half_goals_oppo, goals, goals_oppo, red_cards, red_cards_oppo, yellow_cards, yellow_cards_oppo, corner_kicks, corner_kicks_oppo, venue_capacity, group_count, round_count, shot_on_target, shot_on_target_oppo, shot_off_target, shot_off_target_oppo, attack, attack_oppo, danger_attack, danger_attack_oppo, possession, possession_oppo, blocked_shot, blocked_shot_oppo`
 
-这里的 `goals`、`goals_oppo`、半场比分、红黄牌、角球等均来自目标比赛之前的历史比赛，不是目标比赛的实时数据。
+类别特征（4）：`competition_type, is_neutral, is_double_week, venue_surface`。数值特征只用实际训练子集拟合缺失值和标准化参数；类别先映射为整数，再分别嵌入后送入主、客队 GRU。
 
-### Known：预测时已知的时间位置
+### Known：历史与目标比赛均可获得的时变特征
 
-`history_position`：长度为 11 的归一化历史位置，前 10 个位置对应编码器历史序列，最后一个位置对应预测时点。目标比赛的实际赛果不会作为 known 输入。
+数值特征（每队 9 个）：`rank, rank_oppo, group_num, round_num, round_progress, pressure, temperature, wind, humidity`
 
-### Static：目标比赛的赛前上下文
+类别特征（每队 1 个）：`weather`
 
-连续变量：`rank, rank_oppo, venue_capacity, group_count, round_count, group_num, round_num, round_progress, pressure, temperature, wind, humidity`
+主、客队各自的历史 known 特征按相同的“第几近”时间步并排输入，保留两路特征；目标比赛 decoder 步使用结果表中的赛前值。目标比赛客队的 `rank`/`rank_oppo` 按客队视角交换，其他共享的比赛字段两侧相同。`history_position` 仍作为一个归一化数值 known 特征。因此 known 张量共 19 个连续通道（含 `history_position`）和两个类别通道 `home_weather, away_weather`，默认形状为 `(样本数, 11, 21)`。
 
-类别变量：`competition_type, venue_id, venue_surface, stage_id, season_id, weather`
+### Static：目标比赛不随时间变化的赛前上下文
 
-静态类别特征使用训练集拟合类别映射，验证集或测试集中未见过的类别编码为 0。
+数值特征（3）：`venue_capacity, group_count, round_count`
+
+类别特征（2）：`competition_type, venue_surface`
+
+### 类别嵌入 cardinality
+
+类别有效取值数按 `[competition_type, is_neutral, is_double_week, venue_surface, weather]` 为
+`[3, 3, 2, 4, 14]`。预处理为未知/缺失类别保留索引 `0`，有效类别从 `1` 开始，因此嵌入表大小（cardinality）分别加一：
+
+- Observed 的类别嵌入（GRU 前，顺序 `competition_type, is_neutral, is_double_week, venue_surface`）：`[4, 4, 3, 5]`
+- Known 的 TFT 类别输入（顺序 `home_weather, away_weather`）：`[15, 15]`
+- Static 的 TFT 类别输入（顺序 `competition_type, venue_surface`）：`[4, 5]`
+
+类别编码采用字段定义中的有效值范围；未知值映射为 `0`。`is_double_week` 在当前新特征 CSV 中实际编码为 `0/1`，预处理按这两个取值映射。
 新训练模型的未知类别嵌入以零向量初始化，避免使用未经训练的随机向量；旧检查点
 加载时仍保留原来的嵌入权重。
 
 ### 明确排除的字段
 
-按需求排除 `match_id, seq_id, id, team_id, team_id_oppo, competition_id, competition_name, match_time`。这些字段不进入模型。结果表中的 `home_scores`、`away_scores` 仅作为监督标签。盘口/赔率字段（`eu_*`、`rq*`）以及 `live*` 字段也不使用，避免模型依赖盘口或实时信息。
+排除 `match_id, seq_id, id, team_id, team_id_oppo, competition_id, competition_name, match_time, venue_id, stage_id, season_id`。这些字段不进入模型。结果表中的 `home_scores`、`away_scores` 仅作为监督标签。盘口/赔率字段（`eu_*`、`rq*`）以及 `live*` 字段也不使用，避免模型依赖盘口或实时信息。
 
 ## 3. 模型结构
 
 1. 主队历史序列 → Home GRU Encoder。
 2. 客队历史序列 → Away GRU Encoder。
 3. 每个历史时间步计算门控权重 `g`，执行 `g * home + (1-g) * away`，并加入主客交互投影。
-4. 10 步融合表示作为 TFT 的 observed 输入；`history_position` 作为 known 输入；赛前比赛上下文作为 static 输入。
+4. 10 步融合表示作为 TFT 的 observed 输入；两队的 known 特征按时间步并排拼接后输入 TFT；目标比赛赛前上下文作为 static 输入。
 5. TFT 输出隐表示，再由分布头预测主队/客队各自的进球分布参数。
 
 默认泊松模型分别预测主客队的正数均值 `lambda`，条件方差也等于 `lambda`；损失为两队
@@ -76,7 +91,7 @@ P10/P50/P90 分别为 0/1/3；小数形式的条件期望仍保存在 `pred_*_xg
 - 剩余 2,764 场：独立测试集。
 
 因此，验证集仍属于用户指定的前 6,000 场训练数据范围；测试集完全位于后续时间段。
-缺失值填充、归一化统计量和类别映射只使用实际梯度训练集拟合，不使用验证集或测试集。
+缺失值填充和归一化统计量只使用实际梯度训练集拟合，不使用验证集或测试集。类别映射根据字段定义的有效取值范围固定，其他值归入未知类别 `0`。
 旧版预处理数据需要重新生成；旧检查点仍须配合生成该检查点时的数据使用。
 
 ## 5. 安装依赖
@@ -101,6 +116,10 @@ python -m pip install numpy pandas scikit-learn scipy torch
 
 主要配置项：
 
+- 所有运行配置集中在 `configs/football_tft.json`。输入字段名、每队历史行数和
+  seq_id 起点在 `history_schema`；Observed/known/static 字段、类别有效值、标签列和排除列
+  在 `features`；未知类别编号、数值回退值和 history_position 范围在 `preprocessing`。
+  训练、模型、设备和推理参数与这些数据配置共用同一个 JSON 文件。
 - 数据：`feature_path`、`results_path`、`processed_dir`、`train_size`、
   `context_length`。源数据每队有 10 场历史，`context_length` 可设为 1–10，
   使用每队最近的相应场数。修改 `train_size`、`context_length` 或 `validation_fraction`

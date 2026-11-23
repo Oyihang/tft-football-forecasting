@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
-from src.config import DEFAULT_CONFIG, load_config, resolve_device
+from src.config import DEFAULT_CONFIG, data_config_snapshot, load_config, resolve_device
 from src.models.football_tft import build_football_tft
 from src.training.trainer import make_loader, predict_params
 
@@ -55,6 +55,8 @@ def main():
     prepared_schema = json.loads((data_dir / "feature_schema.json").read_text(encoding="utf-8"))
     if prepared_schema != schema:
         raise ValueError("Prepared data schema differs from checkpoint; use matching data and checkpoint.")
+    if schema.get("data_config") != data_config_snapshot(cfg):
+        raise ValueError("Data configuration differs from checkpoint; use a matching config and data.")
     model = build_football_tft(schema, ckpt["model_config"]).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     with np.load(data_dir / "split_indices.npz") as split:

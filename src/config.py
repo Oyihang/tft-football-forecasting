@@ -6,30 +6,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "football_tft.json"
+DATA_CONFIG_KEYS = ("history_schema", "features", "preprocessing", "context_length", "train_size")
 
-# Defaults for configurations and checkpoints created before these options existed.
-NEW_OPTION_DEFAULTS = {
-    "feature_path": "data/a_a_a_feature.csv",
-    "results_path": "data/a_a_a_test.csv",
-    "context_length": 10,
-    "distribution": "negative_binomial",
-    "gru_layers": 1,
-    "gru_dropout": 0.0,
-    "optimizer_betas": [0.9, 0.999],
-    "optimizer_eps": 1e-8,
-    "scheduler_factor": 0.5,
-    "scheduler_patience": 2,
-    "scheduler_threshold": 0.0001,
-    "scheduler_cooldown": 0,
-    "scheduler_min_lr": 0.0,
-    "inference_quantiles": [0.1, 0.5, 0.9],
-    "handicap_output": "artifacts/football_tft_poisson/handicap_predictions.csv",
-}
+
+def _merge_config(base: dict, overrides: dict) -> dict:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def load_config(path: Path) -> dict:
+    defaults = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    legacy_defaults = defaults.pop("legacy_defaults", {})
     config = json.loads(path.read_text(encoding="utf-8"))
-    return {**NEW_OPTION_DEFAULTS, **config}
+    config.pop("legacy_defaults", None)
+    return _merge_config(_merge_config(defaults, legacy_defaults), config)
+
+
+def data_config_snapshot(config: dict) -> dict:
+    return {key: config[key] for key in DATA_CONFIG_KEYS}
 
 
 def resolve_device(name: str):
